@@ -1,0 +1,200 @@
+---
+# ConfigMap to store the fetched Bunny CDN IPs
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bunny-trusted-ips
+  namespace: default
+  labels:
+    app.kubernetes.io/name: bunny-ip-updater
+    app.kubernetes.io/component: config
+    app.kubernetes.io/managed-by: cronjob
+data:
+  trusted_ips: ""
+---
+# ServiceAccount for the job with minimal permissions
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bunny-ip-updater
+  namespace: default
+  labels:
+    app.kubernetes.io/name: bunny-ip-updater
+    app.kubernetes.io/component: rbac
+---
+# Role with least privilege access - namespace scoped only
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bunny-ip-updater
+  namespace: default
+  labels:
+    app.kubernetes.io/name: bunny-ip-updater
+    app.kubernetes.io/component: rbac
+    security.compliance/audit: "required"
+    security.compliance/principle: "least-privilege"
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["bunny-trusted-ips"]  # Only this specific ConfigMap
+  verbs: ["get", "update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]  # Only for initial ConfigMap creation
+---
+# RoleBinding to connect ServiceAccount with Role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bunny-ip-updater
+  namespace: default
+  labels:
+    app.kubernetes.io/name: bunny-ip-updater
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bunny-ip-updater
+subjects:
+- kind: ServiceAccount
+  name: bunny-ip-updater
+  namespace: default
+---
+# CronJob that runs daily at 2 AM UTC to fetch Bunny CDN IPs
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bunny-ip-updater
+  namespace: default
+  labels:
+    app.kubernetes.io/name: bunny-ip-updater
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  timeZone: "UTC"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid  # Prevent overlapping jobs
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bunny-ip-updater
+        app.kubernetes.io/component: job
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: bunny-ip-updater
+            app.kubernetes.io/component: pod
+        spec:
+          serviceAccountName: bunny-ip-updater
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534  # nobody user
+            fsGroup: 65534
+          containers:
+          - name: ip-updater
+            image: alpine/curl:latest
+            imagePullPolicy: Always
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              runAsUser: 65534
+              capabilities:
+                drop:
+                - ALL
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              
+              echo "🚀 Starting Bunny CDN IP update process..."
+              echo "📅 Current time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+              
+              # Install required tools
+              echo "📦 Installing required packages..."
+              apk add --no-cache jq kubectl > /dev/null 2>&1
+              
+              # Create temporary directory (since root filesystem is read-only)
+              TEMP_DIR="/tmp/bunny-updater"
+              mkdir -p "$TEMP_DIR"
+              TEMP_FILE="$TEMP_DIR/bunny_ips"
+              
+              # Fetch IPv4 addresses
+              echo "🌐 Fetching IPv4 addresses from Bunny CDN..."
+              if ! curl -f -s --max-time 30 https://bunnycdn.com/api/system/edgeserverlist \
+                -H "Accept: application/json" | jq -r .[] > "$TEMP_FILE"; then
+                echo "❌ Failed to fetch IPv4 addresses"
+                exit 1
+              fi
+              
+              IPV4_COUNT=$(wc -l < "$TEMP_FILE")
+              echo "✅ Fetched $IPV4_COUNT IPv4 addresses"
+              
+              # Add newline separator
+              echo "" >> "$TEMP_FILE"
+              
+              # Fetch IPv6 addresses
+              echo "🌐 Fetching IPv6 addresses from Bunny CDN..."
+              if ! curl -f -s --max-time 30 https://bunnycdn.com/api/system/edgeserverlist/ipv6 \
+                -H "Accept: application/json" | jq -r .[] >> "$TEMP_FILE"; then
+                echo "❌ Failed to fetch IPv6 addresses"
+                exit 1
+              fi
+              
+              # Count total IPs and create comma-separated list
+              TOTAL_IPS=$(grep -v '^$' "$TEMP_FILE" | wc -l)
+              IPV6_COUNT=$((TOTAL_IPS - IPV4_COUNT))
+              echo "✅ Fetched $IPV6_COUNT IPv6 addresses"
+              echo "📊 Total IP addresses: $TOTAL_IPS"
+              
+              # Remove empty lines and create comma-separated list
+              TRUSTED_IPS=$(grep -v '^$' "$TEMP_FILE" | tr '\n' ',' | sed 's/,$//')
+              
+              if [ -z "$TRUSTED_IPS" ]; then
+                echo "❌ No IPs found, aborting update"
+                exit 1
+              fi
+              
+              # Update ConfigMap with new IPs
+              echo "🔄 Updating ConfigMap with new IP list..."
+              if kubectl patch configmap bunny-trusted-ips \
+                --patch="{\"data\":{\"trusted_ips\":\"$TRUSTED_IPS\"}}"; then
+                echo "✅ ConfigMap updated successfully!"
+              else
+                echo "❌ Failed to update ConfigMap"
+                exit 1
+              fi
+              
+              # Log sample IPs for verification (first 3 and last 3)
+              FIRST_IPS=$(echo "$TRUSTED_IPS" | cut -d',' -f1-3)
+              LAST_IPS=$(echo "$TRUSTED_IPS" | rev | cut -d',' -f1-3 | rev)
+              echo "📋 Sample IPs (first 3): $FIRST_IPS"
+              echo "📋 Sample IPs (last 3): $LAST_IPS"
+              
+              # Cleanup
+              rm -rf "$TEMP_DIR"
+              
+              echo "🎉 Bunny CDN IP update completed successfully at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            env:
+            - name: TZ
+              value: "UTC"
+            volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"
+                ephemeral-storage: "100Mi"
+              limits:
+                memory: "128Mi"
+                cpu: "200m"
+                ephemeral-storage: "200Mi"
+          volumes:
+          - name: tmp
+            emptyDir: {}
