@@ -1,0 +1,163 @@
+# Mastodon Helm Chart Values for Bunny CDN Integration
+#
+# This values.yaml configuration integrates the Bunny CDN IP updater
+# with the Mastodon Helm chart for automatic trusted proxy configuration.
+
+mastodon:
+  # Configure Mastodon to use Bunny CDN IPs as trusted proxies
+  # This will be populated automatically by the bunny-ip-updater CronJob
+  createAdmin: true
+  
+  # Domain configuration
+  local_domain: your-mastodon-domain.com
+  web_domain: your-mastodon-domain.com
+  
+  # SMTP configuration (required)
+  smtp:
+    server: smtp.your-email-provider.com
+    port: 587
+    login: your-smtp-username
+    password: your-smtp-password
+    from_address: noreply@your-mastodon-domain.com
+  
+  # S3 configuration for media storage (recommended)
+  s3:
+    enabled: true
+    access_key: your-s3-access-key
+    access_secret: your-s3-secret-key
+    bucket: your-mastodon-media-bucket
+    endpoint: https://your-s3-endpoint.com
+    hostname: your-s3-hostname.com
+    region: your-s3-region
+
+  # Additional environment variables to configure trusted proxy IPs
+  extraEnvFrom:
+    # Reference the ConfigMap created by bunny-ip-updater
+    - configMapRef:
+        name: bunny-trusted-ips
+        optional: false
+  
+  # Custom environment variables for trusted proxy configuration
+  extraEnvVars:
+    # Override the default trusted proxy configuration to use Bunny CDN IPs
+    - name: TRUSTED_PROXY_IP
+      valueFrom:
+        configMapKeyRef:
+          name: bunny-trusted-ips
+          key: trusted_ips
+          optional: false
+
+# PostgreSQL configuration
+postgresql:
+  enabled: true
+  auth:
+    username: mastodon
+    database: mastodon_production
+    # Set a secure password or use existingSecret
+    password: your-secure-postgresql-password
+
+# Redis configuration  
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    # Set a secure password or use existingSecret
+    password: your-secure-redis-password
+
+# Elasticsearch (optional, for full-text search)
+elasticsearch:
+  enabled: false
+
+# Ingress configuration with Bunny CDN considerations
+ingress:
+  enabled: true
+  annotations:
+    # Configure for Bunny CDN
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/proxy-body-size: "40m"
+    nginx.ingress.kubernetes.io/client-max-body-size: "40m"
+    # Enable real IP forwarding for proper client IP detection
+    nginx.ingress.kubernetes.io/use-forwarded-headers: "true"
+    nginx.ingress.kubernetes.io/enable-real-ip: "true"
+    # SSL redirect
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # Rate limiting considerations for CDN
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+  
+  hosts:
+    - host: your-mastodon-domain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  
+  tls:
+    - secretName: mastodon-tls
+      hosts:
+        - your-mastodon-domain.com
+
+# Streaming ingress (WebSocket connections)
+# Important: Bunny CDN should be configured to properly handle WebSocket connections
+ingressStreaming:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    # WebSocket specific configurations
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/server-snippets: |
+      location /api/v1/streaming {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_cache_bypass $http_upgrade;
+      }
+  
+  hosts:
+    - host: your-mastodon-domain.com
+      paths:
+        - path: /api/v1/streaming
+          pathType: Prefix
+
+# Resources
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+# Persistence
+persistence:
+  assets:
+    # For storing compiled assets
+    enabled: true
+    storageClass: "your-storage-class"
+    accessMode: ReadWriteOnce
+    size: 10Gi
+  
+  system:
+    # For storing uploaded media if not using S3
+    enabled: true
+    storageClass: "your-storage-class" 
+    accessMode: ReadWriteOnce
+    size: 100Gi
+
+# Pod disruption budget for high availability
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# Security context
+securityContext:
+  runAsUser: 991
+  runAsGroup: 991
+  fsGroup: 991
