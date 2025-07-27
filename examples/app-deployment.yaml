@@ -27,7 +27,7 @@ spec:
           valueFrom:
             configMapKeyRef:
               name: bunny-trusted-ips
-              key: trusted_ips
+              key: TRUSTED_PROXY_IP
         volumeMounts:
         # Method 2: File mount
         - name: trusted-ips-file
@@ -45,5 +45,5 @@ spec:
         configMap:
           name: bunny-trusted-ips
           items:
-          - key: trusted_ips
+          - key: TRUSTED_PROXY_IP
             path: trusted_ips.txt

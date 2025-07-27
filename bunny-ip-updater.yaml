@@ -91,18 +91,18 @@ spec:
           serviceAccountName: bunny-ip-updater
           restartPolicy: OnFailure
           securityContext:
-            runAsNonRoot: true
-            runAsUser: 65534  # nobody user
-            fsGroup: 65534
+            runAsNonRoot: false
+            runAsUser: 0  # root user for package installation
+            fsGroup: 0
           containers:
           - name: ip-updater
             image: alpine/curl:latest
             imagePullPolicy: Always
             securityContext:
               allowPrivilegeEscalation: false
-              readOnlyRootFilesystem: true
-              runAsNonRoot: true
-              runAsUser: 65534
+              readOnlyRootFilesystem: false
+              runAsNonRoot: false
+              runAsUser: 0
               capabilities:
                 drop:
                 - ALL
@@ -117,7 +117,14 @@ spec:
               
               # Install required tools
               echo "📦 Installing required packages..."
-              apk add --no-cache jq kubectl > /dev/null 2>&1
+              apk add --no-cache jq curl > /dev/null 2>&1
+              
+              # Install kubectl to /tmp since filesystem is read-only
+              echo "📦 Installing kubectl..."
+              cd /tmp
+              curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" > /dev/null 2>&1
+              chmod +x kubectl
+              export PATH="/tmp:$PATH"
               
               # Create temporary directory (since root filesystem is read-only)
               TEMP_DIR="/tmp/bunny-updater"
@@ -127,7 +134,7 @@ spec:
               # Fetch IPv4 addresses
               echo "🌐 Fetching IPv4 addresses from Bunny CDN..."
               if ! curl -f -s --max-time 30 https://bunnycdn.com/api/system/edgeserverlist \
-                -H "Accept: application/json" | jq -r .[] > "$TEMP_FILE"; then
+                -H "Accept: application/json" | jq -r '.[]' > "$TEMP_FILE"; then
                 echo "❌ Failed to fetch IPv4 addresses"
                 exit 1
               fi
@@ -141,7 +148,7 @@ spec:
               # Fetch IPv6 addresses
               echo "🌐 Fetching IPv6 addresses from Bunny CDN..."
               if ! curl -f -s --max-time 30 https://bunnycdn.com/api/system/edgeserverlist/ipv6 \
-                -H "Accept: application/json" | jq -r .[] >> "$TEMP_FILE"; then
+                -H "Accept: application/json" | jq -r '.[]' >> "$TEMP_FILE"; then
                 echo "❌ Failed to fetch IPv6 addresses"
                 exit 1
               fi

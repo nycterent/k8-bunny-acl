@@ -35,10 +35,10 @@ kubectl apply -f bunny-ip-updater.yaml
 kubectl get cronjob bunny-ip-updater
 
 # Verify ConfigMap population
-kubectl get configmap bunny-trusted-ips -o jsonpath='{.data.trusted_ips}' | tr ',' '\n' | wc -l
+kubectl get configmap bunny-trusted-ips -o jsonpath='{.data.TRUSTED_PROXY_IP}' | tr ',' '\n' | wc -l
 
 # View sample IPs
-kubectl get configmap bunny-trusted-ips -o jsonpath='{.data.trusted_ips}' | tr ',' '\n' | head -5
+kubectl get configmap bunny-trusted-ips -o jsonpath='{.data.TRUSTED_PROXY_IP}' | tr ',' '\n' | head -5
 
 # Check recent job runs
 kubectl get jobs -l job-name=bunny-ip-updater --sort-by=.metadata.creationTimestamp
@@ -56,23 +56,29 @@ kubectl logs -l job-name=bunny-ip-updater --tail=50
 - **Job Container**: Uses `alpine/curl:latest` with security hardening
 
 ### Security Model
-- Namespace-scoped RBAC with resource-specific access to only the `bunny-trusted-ips` ConfigMap
-- Non-root containers (user 65534) with read-only filesystem
+- Namespace-scoped RBAC with minimal required permissions:
+  - ConfigMap access: get, list, create, update, patch for `bunny-trusted-ips`
+  - ConfigMap read access: get, list for Mastodon environment ConfigMaps
+  - Deployment access: get, list, patch for Mastodon deployments (restart capability)
+- Root containers with writable filesystem (required for package installation)
 - Resource limits and security contexts enforced
 - No privileged access or capability escalation
 
 ### Data Flow
 1. CronJob fetches IPv4 addresses from `https://bunnycdn.com/api/system/edgeserverlist`
 2. Fetches IPv6 addresses from `https://bunnycdn.com/api/system/edgeserverlist/ipv6`
-3. Combines and formats as comma-separated list
-4. Updates ConfigMap with `kubectl patch`
-5. Applications consume via environment variables or file mounts
+3. Extracts custom trusted IPs from Mastodon environment ConfigMap (if present)
+4. Combines default ranges, custom IPs, and Bunny CDN IPs as comma-separated list
+5. Updates ConfigMap with `kubectl patch`
+6. Automatically restarts Mastodon deployments to pick up new environment variables
+7. Applications consume updated trusted proxy configuration
 
 ### Integration Patterns
 Applications can consume the IP list through:
-- Environment variable: `TRUSTED_PROXY_IPS` from ConfigMap key `trusted_ips`
-- File mount: Mount ConfigMap as volume at `/etc/trusted-ips/trusted_ips.txt`
-- Init container: Process IPs into application-specific format (see `examples/nginx-config.yaml`)
+- **Mastodon Integration**: Environment variable `TRUSTED_PROXY_IP` from ConfigMap key `TRUSTED_PROXY_IP`
+- **Basic Integration**: Environment variable from ConfigMap key `trusted_ips` (deprecated)
+- **File mount**: Mount ConfigMap as volume for custom processing
+- **Init container**: Process IPs into application-specific format (see examples)
 
 ## File Structure
 
@@ -81,6 +87,21 @@ Applications can consume the IP list through:
 - `scripts/monitor.sh`: Multi-function monitoring and management script
 - `examples/app-deployment.yaml`: Shows environment variable and file mount patterns
 - `examples/nginx-config.yaml`: Advanced init container pattern for Nginx configuration
+
+## Mastodon Integration
+
+For Mastodon deployments, use the specialized integration manifest:
+
+```bash
+# Deploy Bunny IP updater for Mastodon
+kubectl apply -f examples/mastodon-integration.yaml
+
+# Configure Mastodon Helm values to reference the ConfigMap
+# See examples/mastodon-values.yaml
+# 
+# Note: The Mastodon integration automatically restarts deployments 
+# after ConfigMap updates to ensure pods pick up new environment variables
+```
 
 ## Monitoring and Troubleshooting
 
@@ -91,3 +112,48 @@ The system is designed to be observable through standard Kubernetes tools:
 - Pod logs contain detailed execution information with emojis for easy parsing
 
 Failed jobs are retained (limit: 3) for troubleshooting, and the monitoring script can compare ConfigMap contents with live API data to detect staleness.
+
+### Common Issues
+
+**Job crashes during package installation (`stream closed EOF`)**:
+- Can be caused by kubectl installation failure from Alpine package manager
+- Fixed by installing kubectl from official Kubernetes release API
+- Check job logs: `kubectl logs -l job-name=bunny-ip-updater --tail=50`
+
+**ConfigMap not updating**:
+- Check RBAC permissions: `kubectl auth can-i update configmaps --as=system:serviceaccount:default:bunny-ip-updater`
+- Verify CronJob schedule and recent job runs
+- Manual trigger: `kubectl create job bunny-ip-manual-$(date +%s) --from=cronjob/bunny-ip-updater`
+
+## Development Workflow
+
+### Testing Changes
+```bash
+# Test the CronJob logic manually
+kubectl create job bunny-ip-test-$(date +%s) --from=cronjob/bunny-ip-updater
+
+# Follow job execution in real-time
+kubectl logs -f job/bunny-ip-test-<timestamp>
+
+# Validate ConfigMap contents after test
+./scripts/monitor.sh compare
+```
+
+### Script Development
+- `scripts/setup.sh`: Interactive deployment with validation
+- `scripts/monitor.sh`: Comprehensive monitoring with subcommands (status|compare|logs|trigger|all)
+- Both scripts use colored output and proper error handling
+- Scripts should be run from project root directory
+
+### YAML Manifest Structure
+The main `bunny-ip-updater.yaml` contains:
+1. ConfigMap: Initial empty data for storing IP addresses
+2. RBAC: ServiceAccount + Role + RoleBinding with least privilege
+3. CronJob: Alpine-based container with curl and kubectl
+
+### Security Considerations
+- Root containers with writable filesystem (required for package installation)
+- Resource limits prevent resource exhaustion
+- RBAC restricts access to necessary resources only
+- No privileged access or capability escalation
+- Minimal attack surface with Alpine base image

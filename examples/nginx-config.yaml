@@ -87,7 +87,7 @@ spec:
           valueFrom:
             configMapKeyRef:
               name: bunny-trusted-ips
-              key: trusted_ips
+              key: TRUSTED_PROXY_IP
         volumeMounts:
         - name: shared-config
           mountPath: /shared

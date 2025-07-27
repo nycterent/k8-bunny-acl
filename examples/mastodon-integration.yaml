@@ -22,7 +22,7 @@ metadata:
     app.kubernetes.io/component: config
     app.kubernetes.io/managed-by: cronjob
 data:
-  trusted_ips: ""
+  TRUSTED_PROXY_IP: ""
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -50,7 +50,10 @@ rules:
   verbs: ["get", "update", "patch"]
 - apiGroups: [""]
   resources: ["configmaps"]
-  verbs: ["create"]
+  verbs: ["create", "get", "list"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -99,18 +102,19 @@ spec:
           serviceAccountName: bunny-ip-updater
           restartPolicy: OnFailure
           securityContext:
-            runAsNonRoot: true
-            runAsUser: 65534
-            fsGroup: 65534
+            runAsNonRoot: false
+            runAsUser: 0  # root user for package installation
+            fsGroup: 0
           containers:
           - name: ip-updater
             image: alpine/curl:latest
             imagePullPolicy: Always
+            # No hardcoded CUSTOM_TRUSTED_IPS - will be extracted from Mastodon deployment
             securityContext:
               allowPrivilegeEscalation: false
-              readOnlyRootFilesystem: true
-              runAsNonRoot: true
-              runAsUser: 65534
+              readOnlyRootFilesystem: false
+              runAsNonRoot: false
+              runAsUser: 0
               capabilities:
                 drop:
                 - ALL
@@ -125,7 +129,14 @@ spec:
               
               # Install required tools
               echo "📦 Installing required packages..."
-              apk add --no-cache jq kubectl > /dev/null 2>&1
+              apk add --no-cache jq curl > /dev/null 2>&1
+              
+              # Install kubectl to /tmp since filesystem is read-only
+              echo "📦 Installing kubectl..."
+              cd /tmp
+              curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" > /dev/null 2>&1
+              chmod +x kubectl
+              export PATH="/tmp:$PATH"
               
               # Create temporary directory
               TEMP_DIR="/tmp/bunny-updater"
@@ -135,7 +146,7 @@ spec:
               # Fetch IPv4 addresses
               echo "🌐 Fetching IPv4 addresses from Bunny CDN..."
               if ! curl -f -s --max-time 30 https://bunnycdn.com/api/system/edgeserverlist \
-                -H "Accept: application/json" | jq -r .[] > "$TEMP_FILE"; then
+                -H "Accept: application/json" | jq -r '.[]' > "$TEMP_FILE"; then
                 echo "❌ Failed to fetch IPv4 addresses"
                 exit 1
               fi
@@ -149,7 +160,7 @@ spec:
               # Fetch IPv6 addresses
               echo "🌐 Fetching IPv6 addresses from Bunny CDN..."
               if ! curl -f -s --max-time 30 https://bunnycdn.com/api/system/edgeserverlist/ipv6 \
-                -H "Accept: application/json" | jq -r .[] >> "$TEMP_FILE"; then
+                -H "Accept: application/json" | jq -r '.[]' >> "$TEMP_FILE"; then
                 echo "❌ Failed to fetch IPv6 addresses"
                 exit 1
               fi
@@ -168,11 +179,51 @@ spec:
                 exit 1
               fi
               
-              # Update ConfigMap with new IPs
+              # Create TRUSTED_PROXY_IP with default ranges + custom IPs + Bunny CDN IPs
+              DEFAULT_RANGES="127.0.0.1/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
+              
+              # Extract custom IPs from Mastodon environment ConfigMap
+              echo "🔍 Checking Mastodon environment ConfigMap for custom trusted IPs..."
+              CUSTOM_TRUSTED_IPS=""
+              
+              # Extract CUSTOM_TRUSTED_IPS from Mastodon env ConfigMap
+              # Look for ConfigMaps with Mastodon labels that contain CUSTOM_TRUSTED_IPS
+              MASTODON_CONFIG_MAPS=$(kubectl get configmaps -l app.kubernetes.io/name=mastodon -o name 2>/dev/null)
+              for CM_NAME in $MASTODON_CONFIG_MAPS; do
+                CUSTOM_TRUSTED_IPS=$(kubectl get "$CM_NAME" -o jsonpath='{.data.CUSTOM_TRUSTED_IPS}' 2>/dev/null || echo "")
+                if [ -n "$CUSTOM_TRUSTED_IPS" ]; then
+                  echo "📋 Found custom trusted IPs in Mastodon configuration"
+                  break
+                fi
+              done
+              
+              # Add custom IPs if found
+              if [ -n "$CUSTOM_TRUSTED_IPS" ]; then
+                TRUSTED_PROXY_IP="${DEFAULT_RANGES},${CUSTOM_TRUSTED_IPS},${TRUSTED_IPS}"
+                echo "📋 Including custom trusted IPs in configuration"
+              else
+                TRUSTED_PROXY_IP="${DEFAULT_RANGES},${TRUSTED_IPS}"
+                echo "📋 No custom trusted IPs found in Mastodon ConfigMap"
+              fi
+              
+              # Update ConfigMap with TRUSTED_PROXY_IP for Mastodon
               echo "🔄 Updating ConfigMap for Mastodon..."
               if kubectl patch configmap bunny-trusted-ips \
-                --patch="{\"data\":{\"trusted_ips\":\"$TRUSTED_IPS\"}}"; then
+                --patch="{\"data\":{\"TRUSTED_PROXY_IP\":\"$TRUSTED_PROXY_IP\"}}"; then
                 echo "✅ ConfigMap updated successfully!"
+                
+                # Trigger rolling restart of Mastodon deployments to pick up new ConfigMap
+                echo "🔄 Restarting Mastodon deployments to pick up new trusted proxy IPs..."
+                MASTODON_DEPLOYMENTS=$(kubectl get deployments -l app.kubernetes.io/name=mastodon -o name 2>/dev/null)
+                if [ -n "$MASTODON_DEPLOYMENTS" ]; then
+                  for DEPLOYMENT in $MASTODON_DEPLOYMENTS; do
+                    echo "🔄 Restarting $DEPLOYMENT..."
+                    kubectl rollout restart "$DEPLOYMENT"
+                  done
+                  echo "✅ All Mastodon deployments restarted successfully!"
+                else
+                  echo "⚠️  No Mastodon deployments found to restart"
+                fi
               else
                 echo "❌ Failed to update ConfigMap"
                 exit 1

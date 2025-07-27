@@ -40,11 +40,12 @@ mastodon:
   # Custom environment variables for trusted proxy configuration
   extraEnvVars:
     # Override the default trusted proxy configuration to use Bunny CDN IPs
+    # Use comma-separated format for Rails application
     - name: TRUSTED_PROXY_IP
       valueFrom:
         configMapKeyRef:
           name: bunny-trusted-ips
-          key: trusted_ips
+          key: TRUSTED_PROXY_IP
           optional: false
 
 # PostgreSQL configuration
