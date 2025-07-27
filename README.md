@@ -17,7 +17,7 @@ kubectl get cronjob bunny-ip-updater
 kubectl get configmap bunny-trusted-ips
 
 # Check the IPs
-kubectl get configmap bunny-trusted-ips -o jsonpath='{.data.trusted_ips}' | tr ',' '\n' | head -5
+kubectl get configmap bunny-trusted-ips -o jsonpath='{.data.TRUSTED_PROXY_IP}' | tr ',' '\n' | head -5
 ```
 
 ## 📖 Features
@@ -38,7 +38,7 @@ env:
   valueFrom:
     configMapKeyRef:
       name: bunny-trusted-ips
-      key: trusted_ips
+      key: TRUSTED_PROXY_IP
 ```
 
 ### File Mount
@@ -53,6 +53,22 @@ volumes:
     name: bunny-trusted-ips
 ```
 
+## 🐘 Mastodon Integration
+
+Special integration for [Mastodon Helm chart](https://github.com/mastodon/chart) with automatic trusted proxy configuration:
+
+```bash
+# Deploy Mastodon integration
+kubectl apply -f examples/mastodon-integration.yaml
+
+# Use provided Helm values
+helm install mastodon mastodon/mastodon \
+  --namespace mastodon \
+  --values examples/mastodon-values.yaml
+```
+
+See [docs/MASTODON_INTEGRATION.md](docs/MASTODON_INTEGRATION.md) for complete setup guide.
+
 ## 🔍 Monitoring
 
 ```bash
@@ -63,16 +79,31 @@ kubectl get cronjob bunny-ip-updater
 kubectl logs -l job-name=bunny-ip-updater --tail=50
 
 # Check IP count
-kubectl get configmap bunny-trusted-ips -o jsonpath='{.data.trusted_ips}' | tr ',' '\n' | wc -l
+kubectl get configmap bunny-trusted-ips -o jsonpath='{.data.TRUSTED_PROXY_IP}' | tr ',' '\n' | wc -l
+
+# Use monitoring script for advanced checks
+./scripts/monitor.sh status
+./scripts/monitor.sh compare  # Compare with live API
 ```
 
 ## 📁 Repository Structure
 
 ```
-├── bunny-ip-updater.yaml    # Main Kubernetes manifests
-├── examples/                # Integration examples
-├── scripts/                 # Setup and utility scripts
-└── README.md               # This file
+├── bunny-ip-updater.yaml              # Main Kubernetes manifests
+├── examples/                           # Integration examples
+│   ├── app-deployment.yaml            # Basic application integration
+│   ├── mastodon-integration.yaml      # Mastodon Helm chart integration
+│   ├── mastodon-values.yaml           # Mastodon Helm values template
+│   └── nginx-config.yaml              # Nginx configuration example
+├── scripts/                            # Deployment and monitoring scripts
+│   ├── setup.sh                       # Interactive deployment script
+│   └── monitor.sh                     # Monitoring and management tools
+├── docs/                              # Documentation
+│   └── MASTODON_INTEGRATION.md        # Detailed Mastodon integration guide
+├── .github/workflows/                 # CI/CD workflows
+│   └── semgrep.yml                    # Security scanning
+├── CLAUDE.md                          # AI assistant instructions
+└── README.md                          # This file
 ```
 
 ## 🔒 Security

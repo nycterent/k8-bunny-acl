@@ -37,7 +37,7 @@ kubectl create job bunny-ip-manual-initial --from=cronjob/bunny-ip-updater -n ma
 
 # Wait for job completion and verify ConfigMap
 kubectl wait --for=condition=complete --timeout=300s job/bunny-ip-manual-initial -n mastodon
-kubectl get configmap bunny-trusted-ips -n mastodon -o jsonpath='{.data.trusted_ips}' | tr ',' '\n' | wc -l
+kubectl get configmap bunny-trusted-ips -n mastodon -o jsonpath='{.data.TRUSTED_PROXY_IP}' | tr ',' '\n' | wc -l
 
 # Cleanup manual job
 kubectl delete job bunny-ip-manual-initial -n mastodon
@@ -82,7 +82,7 @@ mastodon:
       valueFrom:
         configMapKeyRef:
           name: bunny-trusted-ips
-          key: trusted_ips
+          key: TRUSTED_PROXY_IP
           optional: false
 ```
 
