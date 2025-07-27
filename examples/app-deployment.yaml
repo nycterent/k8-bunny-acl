@@ -16,11 +16,23 @@ spec:
       labels:
         app.kubernetes.io/name: example-app
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
       containers:
       - name: app
         image: nginx:alpine
         ports:
         - containerPort: 8080
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          capabilities:
+            drop:
+            - ALL
         env:
         # Method 1: Environment variable with all IPs
         - name: TRUSTED_PROXY_IPS

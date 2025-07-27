@@ -57,9 +57,21 @@ spec:
       labels:
         app: nginx-bunny
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
       initContainers:
       - name: generate-nginx-config
         image: alpine:latest
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          capabilities:
+            drop:
+            - ALL
         command:
         - /bin/sh
         - -c
@@ -94,6 +106,14 @@ spec:
       containers:
       - name: nginx
         image: nginx:alpine
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          capabilities:
+            drop:
+            - ALL
         ports:
         - containerPort: 80
         volumeMounts:
