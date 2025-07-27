@@ -117,7 +117,13 @@ spec:
               
               # Install required tools
               echo "📦 Installing required packages..."
-              apk add --no-cache jq curl > /dev/null 2>&1
+              if ! apk add --no-cache jq curl; then
+                echo "❌ Failed to install required packages (jq, curl)"
+                echo "📋 Available packages:"
+                apk search jq
+                exit 1
+              fi
+              echo "✅ Successfully installed jq and curl"
               
               # Install kubectl to /tmp since filesystem is read-only
               echo "📦 Installing kubectl..."

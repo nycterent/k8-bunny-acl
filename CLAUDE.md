@@ -115,9 +115,10 @@ Failed jobs are retained (limit: 3) for troubleshooting, and the monitoring scri
 
 ### Common Issues
 
-**Job crashes during package installation (`stream closed EOF`)**:
-- Can be caused by kubectl installation failure from Alpine package manager
-- Fixed by installing kubectl from official Kubernetes release API
+**Job crashes during package installation**:
+- `jq: command not found`: Fixed by improving package installation error handling and visibility
+- `stream closed EOF`: Can be caused by kubectl installation failure from Alpine package manager
+- Fixed by installing kubectl from official Kubernetes release API and adding proper error handling for jq/curl installation
 - Check job logs: `kubectl logs -l job-name=bunny-ip-updater --tail=50`
 
 **ConfigMap not updating**:
